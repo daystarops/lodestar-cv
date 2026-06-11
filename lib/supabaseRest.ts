@@ -8,10 +8,32 @@ type SubmissionPayload = {
   resumePath?: string;
   preview?: unknown;
   paymentStatus?: string;
+  stripeSessionId?: string;
+  checkoutUrl?: string;
 };
+
+type SubmissionUpdatePayload = Partial<SubmissionPayload>;
 
 function hasSupabase() {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function toSubmissionRow(payload: SubmissionUpdatePayload) {
+  const row: Record<string, unknown> = {};
+
+  if (payload.email !== undefined) row.email = payload.email;
+  if (payload.name !== undefined) row.name = payload.name || null;
+  if (payload.targetRole !== undefined) row.target_role = payload.targetRole || null;
+  if (payload.jobDescription !== undefined) row.job_description = payload.jobDescription || null;
+  if (payload.extraContext !== undefined) row.extra_context = payload.extraContext || null;
+  if (payload.resumeFileName !== undefined) row.resume_file_name = payload.resumeFileName || null;
+  if (payload.resumePath !== undefined) row.resume_path = payload.resumePath || null;
+  if (payload.preview !== undefined) row.preview = payload.preview || null;
+  if (payload.paymentStatus !== undefined) row.payment_status = payload.paymentStatus || 'previewed';
+  if (payload.stripeSessionId !== undefined) row.stripe_session_id = payload.stripeSessionId || null;
+  if (payload.checkoutUrl !== undefined) row.checkout_url = payload.checkoutUrl || null;
+
+  return row;
 }
 
 export async function uploadResumeToSupabase(file: File) {
@@ -58,14 +80,8 @@ export async function createSubmission(payload: SubmissionPayload) {
       Prefer: 'return=representation'
     },
     body: JSON.stringify({
+      ...toSubmissionRow(payload),
       email: payload.email,
-      name: payload.name || null,
-      target_role: payload.targetRole || null,
-      job_description: payload.jobDescription || null,
-      extra_context: payload.extraContext || null,
-      resume_file_name: payload.resumeFileName || null,
-      resume_path: payload.resumePath || null,
-      preview: payload.preview || null,
       payment_status: payload.paymentStatus || 'previewed'
     })
   });
@@ -77,6 +93,37 @@ export async function createSubmission(payload: SubmissionPayload) {
 
   const data = await res.json();
   return data[0];
+}
+
+export async function updateSubmission(id: string, payload: SubmissionUpdatePayload) {
+  if (!hasSupabase()) {
+    return { id, skipped: true };
+  }
+
+  const row = toSubmissionRow(payload);
+  if (!Object.keys(row).length) {
+    return { id };
+  }
+
+  const url = `${process.env.SUPABASE_URL}/rest/v1/submissions?id=eq.${encodeURIComponent(id)}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY as string,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation'
+    },
+    body: JSON.stringify(row)
+  });
+
+  if (!res.ok) {
+    const message = await res.text();
+    throw new Error(`Supabase update failed: ${message}`);
+  }
+
+  const data = await res.json();
+  return data[0] || { id };
 }
 
 export async function listSubmissions() {

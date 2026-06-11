@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { appConfig, getOrigin } from '@/lib/config';
-import { createSubmission } from '@/lib/supabaseRest';
+import { createSubmission, updateSubmission } from '@/lib/supabaseRest';
 
 export async function POST(req: Request) {
   try {
@@ -13,12 +13,13 @@ export async function POST(req: Request) {
     const resumeFileName = String(body.resumeFileName || '');
     const resumePath = String(body.resumePath || '');
     const preview = body.preview || null;
+    const submissionId = String(body.submissionId || '');
 
     if (!email) {
       return NextResponse.json({ error: 'Email is required.' }, { status: 400 });
     }
 
-    const submission = await createSubmission({
+    const submissionPayload = {
       email,
       name,
       targetRole,
@@ -28,7 +29,11 @@ export async function POST(req: Request) {
       resumePath,
       preview,
       paymentStatus: 'checkout_started'
-    });
+    };
+
+    let submission = submissionId
+      ? await updateSubmission(submissionId, submissionPayload)
+      : await createSubmission(submissionPayload);
 
     if (!process.env.STRIPE_SECRET_KEY) {
       return NextResponse.json({
@@ -69,6 +74,12 @@ export async function POST(req: Request) {
     }
 
     const session = await stripeRes.json();
+    submission = await updateSubmission(String(submission?.id || submissionId), {
+      stripeSessionId: session.id,
+      checkoutUrl: session.url,
+      paymentStatus: 'checkout_started'
+    });
+
     return NextResponse.json({ url: session.url });
   } catch (error) {
     return NextResponse.json(

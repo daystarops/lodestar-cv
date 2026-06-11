@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createSubmission, uploadResumeToSupabase } from '@/lib/supabaseRest';
+import { createSubmission, updateSubmission, uploadResumeToSupabase } from '@/lib/supabaseRest';
 
 function keywordScan(text: string) {
   const library = [
@@ -71,6 +71,7 @@ export async function POST(req: Request) {
     const targetRole = String(form.get('targetRole') || 'Target role');
     const jobDescription = String(form.get('jobDescription') || '');
     const extraContext = String(form.get('extraContext') || '');
+    const submissionId = String(form.get('submissionId') || '');
 
     let resumePath = '';
     let resumeFileName = '';
@@ -94,7 +95,7 @@ export async function POST(req: Request) {
 
     let submission = null;
     if (email) {
-      submission = await createSubmission({
+      const payload = {
         email,
         name,
         targetRole,
@@ -104,7 +105,11 @@ export async function POST(req: Request) {
         resumePath,
         preview,
         paymentStatus: 'previewed'
-      });
+      };
+
+      submission = submissionId
+        ? await updateSubmission(submissionId, payload)
+        : await createSubmission(payload);
     }
 
     return NextResponse.json({ preview, submissionId: submission?.id || null, resumePath });

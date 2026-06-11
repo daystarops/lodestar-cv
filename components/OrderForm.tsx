@@ -21,6 +21,7 @@ export default function OrderForm() {
   const [jobDescription, setJobDescription] = useState('');
   const [extraContext, setExtraContext] = useState('');
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [submissionId, setSubmissionId] = useState('');
   const [resumePath, setResumePath] = useState('');
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingCheckout, setLoadingCheckout] = useState(false);
@@ -45,6 +46,7 @@ export default function OrderForm() {
       data.append('targetRole', targetRole);
       data.append('jobDescription', jobDescription);
       data.append('extraContext', extraContext);
+      data.append('submissionId', submissionId);
 
       const res = await fetch('/api/preview', {
         method: 'POST',
@@ -55,6 +57,7 @@ export default function OrderForm() {
       if (!res.ok) throw new Error(json.error || 'Preview failed.');
 
       setPreview(json.preview);
+      setSubmissionId(json.submissionId || submissionId);
       setResumePath(json.resumePath || '');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Preview failed.');
@@ -84,7 +87,8 @@ export default function OrderForm() {
           extraContext,
           resumeFileName: file?.name || '',
           resumePath,
-          preview
+          preview,
+          submissionId
         })
       });
 
