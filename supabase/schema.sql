@@ -10,6 +10,8 @@ create table if not exists public.submissions (
   resume_path text,
   preview jsonb,
   stripe_session_id text,
+  stripe_payment_intent text,
+  paid_at timestamptz,
   checkout_url text,
   payment_status text default 'previewed'
 );
@@ -19,6 +21,12 @@ add column if not exists stripe_session_id text;
 
 alter table public.submissions
 add column if not exists checkout_url text;
+
+alter table public.submissions
+add column if not exists stripe_payment_intent text;
+
+alter table public.submissions
+add column if not exists paid_at timestamptz;
 
 create index if not exists submissions_created_at_idx on public.submissions (created_at desc);
 create index if not exists submissions_email_idx on public.submissions (email);

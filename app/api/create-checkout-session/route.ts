@@ -48,6 +48,7 @@ export async function POST(req: Request) {
     params.set('success_url', `${origin}/success?session_id={CHECKOUT_SESSION_ID}`);
     params.set('cancel_url', `${origin}/?checkout=cancelled`);
     params.set('customer_email', email);
+    params.set('metadata[submissionId]', String(submission?.id || ''));
     params.set('metadata[submission_id]', String(submission?.id || ''));
     params.set('line_items[0][quantity]', '1');
 

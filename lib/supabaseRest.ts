@@ -9,6 +9,8 @@ type SubmissionPayload = {
   preview?: unknown;
   paymentStatus?: string;
   stripeSessionId?: string;
+  stripePaymentIntent?: string;
+  paidAt?: string;
   checkoutUrl?: string;
 };
 
@@ -31,6 +33,8 @@ function toSubmissionRow(payload: SubmissionUpdatePayload) {
   if (payload.preview !== undefined) row.preview = payload.preview || null;
   if (payload.paymentStatus !== undefined) row.payment_status = payload.paymentStatus || 'previewed';
   if (payload.stripeSessionId !== undefined) row.stripe_session_id = payload.stripeSessionId || null;
+  if (payload.stripePaymentIntent !== undefined) row.stripe_payment_intent = payload.stripePaymentIntent || null;
+  if (payload.paidAt !== undefined) row.paid_at = payload.paidAt || null;
   if (payload.checkoutUrl !== undefined) row.checkout_url = payload.checkoutUrl || null;
 
   return row;
@@ -124,6 +128,40 @@ export async function updateSubmission(id: string, payload: SubmissionUpdatePayl
 
   const data = await res.json();
   return data[0] || { id };
+}
+
+export async function updateSubmissionByStripeSessionId(
+  stripeSessionId: string,
+  payload: SubmissionUpdatePayload
+) {
+  if (!hasSupabase()) {
+    return { stripeSessionId, skipped: true };
+  }
+
+  const row = toSubmissionRow(payload);
+  if (!Object.keys(row).length) {
+    return { stripeSessionId };
+  }
+
+  const url = `${process.env.SUPABASE_URL}/rest/v1/submissions?stripe_session_id=eq.${encodeURIComponent(stripeSessionId)}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+      apikey: process.env.SUPABASE_SERVICE_ROLE_KEY as string,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation'
+    },
+    body: JSON.stringify(row)
+  });
+
+  if (!res.ok) {
+    const message = await res.text();
+    throw new Error(`Supabase update failed: ${message}`);
+  }
+
+  const data = await res.json();
+  return data[0] || { stripeSessionId };
 }
 
 export async function listSubmissions() {
