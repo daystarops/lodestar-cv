@@ -82,6 +82,9 @@ export async function POST(req: Request) {
       resumePath = uploaded.path;
     }
 
+    // TODO: Add proper resume parsing for PDF/DOCX uploads before relying on uploaded
+    // files as rewrite source material. For now fulfillment only uses stored text fields.
+
     const ai = await openAiPreview(targetRole, jobDescription, extraContext);
     const foundKeywords = keywordScan(`${targetRole} ${jobDescription} ${extraContext}`);
 

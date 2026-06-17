@@ -1,6 +1,13 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
-import { updateSubmission, updateSubmissionByStripeSessionId } from '@/lib/supabaseRest';
+import { generatePaidFinalOutput } from '@/lib/finalOutput';
+import { sendFinalRewriteEmail } from '@/lib/email';
+import {
+  getSubmission,
+  getSubmissionByStripeSessionId,
+  updateSubmission,
+  updateSubmissionByStripeSessionId
+} from '@/lib/supabaseRest';
 
 type StripeCheckoutSession = {
   id: string;
@@ -70,6 +77,81 @@ async function updateSubmissionForSession(
   return null;
 }
 
+async function findSubmissionForSession(session: StripeCheckoutSession) {
+  const submissionId = session.metadata?.submissionId || session.metadata?.submission_id || '';
+
+  if (submissionId) {
+    const submission = await getSubmission(submissionId);
+    if (submission) return submission;
+  }
+
+  if (session.id) {
+    return getSubmissionByStripeSessionId(session.id);
+  }
+
+  return null;
+}
+
+async function fulfillCompletedCheckout(session: StripeCheckoutSession) {
+  let submission = await findSubmissionForSession(session);
+  const paidAt = new Date().toISOString();
+
+  submission =
+    (await updateSubmissionForSession(session, {
+      paymentStatus: 'paid',
+      paidAt,
+      stripePaymentIntent: getPaymentIntentId(session)
+    })) || submission;
+
+  if (!submission) {
+    throw new Error('No matching submission found for Stripe checkout session.');
+  }
+
+  let finalOutput = submission.final_output;
+
+  if (!finalOutput) {
+    await updateSubmission(String(submission.id), {
+      finalStatus: 'generating',
+      finalError: null
+    });
+
+    const generated = await generatePaidFinalOutput(submission);
+    finalOutput = generated.output;
+
+    submission = await updateSubmission(String(submission.id), {
+      finalStatus: generated.status,
+      finalOutput,
+      finalError: generated.error,
+      finalGeneratedAt: new Date().toISOString()
+    });
+  }
+
+  if (!submission.email) {
+    await updateSubmission(String(submission.id), {
+      emailStatus: 'failed',
+      emailError: 'Submission is missing customer email.'
+    });
+    return;
+  }
+
+  if (submission.email_status === 'sent') {
+    return;
+  }
+
+  const emailResult = await sendFinalRewriteEmail({
+    to: submission.email,
+    name: submission.name,
+    targetRole: submission.target_role,
+    finalOutput
+  });
+
+  await updateSubmission(String(submission.id), {
+    emailStatus: emailResult.status,
+    emailSentAt: emailResult.sentAt,
+    emailError: emailResult.error
+  });
+}
+
 export async function POST(req: Request) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -94,12 +176,7 @@ export async function POST(req: Request) {
 
   try {
     if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      await updateSubmissionForSession(session, {
-        paymentStatus: 'paid',
-        paidAt: new Date().toISOString(),
-        stripePaymentIntent: getPaymentIntentId(session)
-      });
+      await fulfillCompletedCheckout(event.data.object);
     }
 
     if (event.type === 'checkout.session.expired') {
