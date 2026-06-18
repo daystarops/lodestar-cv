@@ -1,16 +1,39 @@
 export type FinalOutput = {
-  resume_title: string;
-  rewritten_summary: string;
-  core_skills: string[];
-  rewritten_experience: Array<{
-    company: string;
-    role_title: string;
-    bullets: string[];
-  }>;
-  technology: string[];
-  keyword_alignment: string[];
+  resume: {
+    candidate_name: string;
+    contact_line: string;
+    resume_headline: string;
+    professional_summary: string;
+    experience: Array<{
+      company: string;
+      role_title: string;
+      date_range: string;
+      bullets: string[];
+    }>;
+    additional_sections: Array<{
+      section_title: string;
+      items: string[];
+    }>;
+  };
   fit_risks: string[];
   suggested_next_step: string;
+};
+
+type SourceEvidence = {
+  candidate_name: string;
+  contact_line: string;
+  resume_headline: string;
+  professional_summary: string;
+  experience: Array<{
+    company: string;
+    role_title: string;
+    date_range: string;
+    original_bullets: string[];
+  }>;
+  additional_sections: Array<{
+    section_title: string;
+    items: string[];
+  }>;
 };
 
 type RoleBucket =
@@ -52,36 +75,96 @@ const roleBuckets: RoleBucket[] = [
   'ai_engineer_consultant'
 ];
 
-function asStringArray(value: unknown) {
-  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+function normalizeText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim();
 }
 
-function parseRewrittenExperience(value: unknown): FinalOutput['rewritten_experience'] {
+function asStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map(normalizeText).filter(Boolean) : [];
+}
+
+function parseSourceExperience(value: unknown): SourceEvidence['experience'] {
   if (!Array.isArray(value)) return [];
 
-  return value.map((item) => {
-    const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+  return value
+    .map((item) => {
+      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
 
+      return {
+        company: normalizeText(record.company),
+        role_title: normalizeText(record.role_title || record.title),
+        date_range: normalizeText(record.date_range || record.dates),
+        original_bullets: asStringArray(record.original_bullets || record.bullets)
+      };
+    })
+    .filter((item) => item.company || item.role_title || item.original_bullets.length);
+}
+
+function parseAdditionalSections(value: unknown): SourceEvidence['additional_sections'] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+
+      return {
+        section_title: normalizeText(record.section_title || record.title),
+        items: asStringArray(record.items)
+      };
+    })
+    .filter((section) => section.section_title && section.items.length);
+}
+
+function parseSourceEvidence(content: string): SourceEvidence | null {
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
     return {
-      company: String(record.company || ''),
-      role_title: String(record.role_title || record.title || ''),
-      bullets: asStringArray(record.bullets)
+      candidate_name: normalizeText(parsed.candidate_name),
+      contact_line: normalizeText(parsed.contact_line || parsed.contact_information),
+      resume_headline: normalizeText(parsed.resume_headline || parsed.headline),
+      professional_summary: normalizeText(parsed.professional_summary || parsed.summary),
+      experience: parseSourceExperience(parsed.experience),
+      additional_sections: parseAdditionalSections(parsed.additional_sections)
     };
-  });
+  } catch {
+    return null;
+  }
+}
+
+function parseFinalExperience(value: unknown): FinalOutput['resume']['experience'] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => {
+      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+
+      return {
+        company: normalizeText(record.company),
+        role_title: normalizeText(record.role_title || record.title),
+        date_range: normalizeText(record.date_range || record.dates),
+        bullets: asStringArray(record.bullets).slice(0, 5)
+      };
+    })
+    .filter((item) => item.company || item.role_title || item.bullets.length)
+    .slice(0, 3);
 }
 
 function parseFinalOutput(content: string): FinalOutput | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
+    const resume = parsed.resume && typeof parsed.resume === 'object' ? (parsed.resume as Record<string, unknown>) : {};
+
     return {
-      resume_title: String(parsed.resume_title || ''),
-      rewritten_summary: String(parsed.rewritten_summary || ''),
-      core_skills: asStringArray(parsed.core_skills),
-      rewritten_experience: parseRewrittenExperience(parsed.rewritten_experience),
-      technology: asStringArray(parsed.technology),
-      keyword_alignment: asStringArray(parsed.keyword_alignment),
+      resume: {
+        candidate_name: normalizeText(resume.candidate_name),
+        contact_line: normalizeText(resume.contact_line),
+        resume_headline: normalizeText(resume.resume_headline),
+        professional_summary: normalizeText(resume.professional_summary),
+        experience: parseFinalExperience(resume.experience),
+        additional_sections: parseAdditionalSections(resume.additional_sections)
+      },
       fit_risks: asStringArray(parsed.fit_risks),
-      suggested_next_step: String(parsed.suggested_next_step || '')
+      suggested_next_step: normalizeText(parsed.suggested_next_step)
     };
   } catch {
     return null;
@@ -135,152 +218,250 @@ function getRolePack(bucket: RoleBucket) {
   if (bucket === 'sales_sdr_ae') {
     return [
       'Role pack: sales_sdr_ae.',
-      'Prioritize resume evidence related to customer acquisition, outbound follow-up, CRM pipeline management, lead qualification, appointment setting, objection handling, customer discovery, product education, quota or volume achievement, revenue activity, and direct sales transferability.',
-      'Avoid these phrases unless directly supported by resume evidence: dynamic and motivated, eager to leverage, proven ability, successfully increasing brand awareness.',
-      'Do not pretend the candidate did door-to-door sales, lobby events, telecom sales, MDU sales, territory canvassing, or other specific sales motions unless those facts appear in the resume evidence.',
-      'Translate adjacent evidence carefully: customer service may support customer discovery, product education, objection handling, and follow-up only when the resume shows customer interaction. Operations or admin work may support CRM hygiene, pipeline tracking, scheduling, and volume handling only when the resume shows comparable tracking or coordination.'
+      'Prioritize rewording existing resume evidence around customer acquisition, outbound follow-up, CRM pipeline management, internet lead pipelines, lead qualification, appointment setting, objection handling, customer discovery, sales cycle progression, face-to-face selling, product education, sales volume, quota, units sold, and revenue activity only when those facts are present in the parsed resume evidence.',
+      'If the job description asks for telecom, door-to-door, lobby event, or MDU experience and those facts are absent from the parsed resume evidence, do not write them as experience. Put the gap in fit_risks or address it only through supported transferable evidence.',
+      'A supported transferable sentence may describe high-volume customer outreach, prospect follow-up, CRM pipeline management, customer discovery, appointment setting, or objection handling only when similar resume evidence exists.'
     ].join('\n');
   }
 
   return [
     `Role pack: ${bucket}.`,
-    'Use the role bucket only to prioritize relevant resume evidence and job keywords.',
-    'Do not add role-specific duties, tools, credentials, industries, metrics, or accomplishments unless they are present in the resume evidence or extra context.'
+    'Use the role bucket only to prioritize relevant parsed resume evidence.',
+    'Do not add role-specific duties, tools, credentials, industries, metrics, or accomplishments unless they are present in the parsed resume evidence.'
   ].join('\n');
 }
 
-function demoFinalOutput(submission: SubmissionForFinalOutput): FinalOutput {
+function isThinSourceEvidence(source: SourceEvidence) {
+  return (
+    !source.candidate_name &&
+    !source.contact_line &&
+    !source.resume_headline &&
+    !source.professional_summary &&
+    !source.experience.length &&
+    !source.additional_sections.length
+  );
+}
+
+function buildFallbackOutput(
+  source: SourceEvidence,
+  submission: SubmissionForFinalOutput,
+  fallbackReason: string
+): FinalOutput {
   const targetRole = submission.target_role || 'the target role';
-  const jobDescription = submission.job_description || 'the provided job description';
-  const sourceLabel = submission.resume_file_name || submission.name || 'Uploaded resume';
+  const selectedExperience = source.experience.slice(0, 3);
+  const roleTitles = selectedExperience.map((item) => item.role_title).filter(Boolean);
+  const fallbackSummary =
+    source.professional_summary ||
+    (roleTitles.length
+      ? `Candidate positioned for ${targetRole} through documented experience as ${roleTitles.join(', ')}. This draft keeps the rewrite limited to the uploaded resume evidence while emphasizing transferable responsibilities relevant to the target role.`
+      : 'Resume rewrite limited to the available uploaded resume details. This draft avoids adding unsupported employers, roles, duties, tools, credentials, metrics, or industries.');
+
+  const fitRisks = [
+    ...(!source.experience.length
+      ? ['The uploaded resume did not provide enough usable work-history detail for a fuller experience rewrite.']
+      : []),
+    ...(fallbackReason ? ['Some wording was kept conservative to protect against overclaiming from the uploaded resume evidence.'] : []),
+    'Any target-job requirement not shown in the uploaded resume should be treated as a fit risk rather than written as experience.'
+  ];
 
   return {
-    resume_title: `${targetRole} Resume Rewrite`,
-    rewritten_summary: `Candidate positioned for ${targetRole} with a practical mix of customer communication, follow-through, prioritization, and operational reliability. The resume should lead with transferable wins, clear ownership, and keywords drawn directly from the role.`,
-    core_skills: [
-      'Customer communication',
-      'Follow-up',
-      'Prioritization',
-      'Operational reliability',
-      'Process ownership'
-    ],
-    rewritten_experience: [
-      {
-        company: sourceLabel,
-        role_title: targetRole,
-        bullets: [
-          'Reframed customer-facing and operational work into clearer, role-relevant resume achievements.',
-          'Strengthened follow-up, prioritization, communication, and process ownership language for applicant tracking systems.',
-          'Connected transferable experience to the target role with clearer proof points and business impact.'
-        ]
-      }
-    ],
-    technology: [],
-    keyword_alignment: [
-      targetRole,
-      'Customer communication',
-      'Follow up',
-      'Prioritization',
-      'Operations',
-      'Process improvement'
-    ],
-    fit_risks: [
-      'Some experience may need stronger metrics before the final resume is submitted.',
-      `The resume should mirror exact language from this job post: ${jobDescription.slice(0, 140)}`
-    ],
+    resume: {
+      candidate_name: source.candidate_name || normalizeText(submission.name),
+      contact_line: source.contact_line,
+      resume_headline: source.resume_headline,
+      professional_summary: fallbackSummary,
+      experience: selectedExperience.map((item) => ({
+        company: item.company,
+        role_title: item.role_title,
+        date_range: item.date_range,
+        bullets: (item.original_bullets.length ? item.original_bullets : ['Responsibilities preserved from the uploaded resume evidence.']).slice(0, 5)
+      })),
+      additional_sections: source.additional_sections
+    },
+    fit_risks: fitRisks,
     suggested_next_step:
-      'For stronger future applications, Lodestar CV can add a deeper human review pass once more resume detail and measurable outcomes are available.'
+      'For a stronger application package, Lodestar CV can generate a role-specific DOCX/PDF version and a tighter direct-sales variant for telecom, SDR, or account executive roles.'
   };
 }
 
-export async function generatePaidFinalOutput(submission: SubmissionForFinalOutput) {
-  if (!process.env.OPENAI_API_KEY) {
-    return {
-      output: demoFinalOutput(submission),
-      status: 'generated_demo',
-      error: null
-    };
+function validateFinalOutputAgainstSource(output: FinalOutput, source: SourceEvidence) {
+  const sourceCompanies = new Set(source.experience.map((item) => item.company).filter(Boolean));
+  const sourceRoleTitles = new Set(source.experience.map((item) => item.role_title).filter(Boolean));
+
+  for (const item of output.resume.experience) {
+    if (item.company && !sourceCompanies.has(item.company)) {
+      return { valid: false, reason: `Generated company not found in source evidence: ${item.company}` };
+    }
+
+    if (item.role_title && !sourceRoleTitles.has(item.role_title)) {
+      return { valid: false, reason: `Generated role title not found in source evidence: ${item.role_title}` };
+    }
   }
 
+  return { valid: true, reason: '' };
+}
+
+function getMissingResumeTextSource(submission: SubmissionForFinalOutput): SourceEvidence {
+  return {
+    candidate_name: normalizeText(submission.name),
+    contact_line: '',
+    resume_headline: '',
+    professional_summary: '',
+    experience: [],
+    additional_sections: []
+  };
+}
+
+async function callOpenAiJson(messages: Array<{ role: 'system' | 'user'; content: string }>, temperature: number) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature,
+      messages,
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  if (!res.ok) {
+    return { content: null, error: await res.text() };
+  }
+
+  const data = await res.json();
+  return { content: data?.choices?.[0]?.message?.content || null, error: null };
+}
+
+export async function generatePaidFinalOutput(submission: SubmissionForFinalOutput) {
   const targetRole = submission.target_role || 'Target role';
-  const preview = JSON.stringify(submission.preview || {});
   const jobDescription = submission.job_description || '';
   const roleBucket = detectRoleBucket(targetRole, jobDescription);
   const rolePack = getRolePack(roleBucket);
+  const resumeText = submission.resume_text || '';
 
-  // Production-quality rewrites require real PDF/DOCX parsing. Until that is implemented,
-  // fall back to stored resume_text when present plus resume_file_name, job_description,
-  // target_role, extra_context, and preview metadata.
-  const resumeContext = submission.resume_text
-    ? submission.resume_text
-    : `No parsed resume text is available. Uploaded file name: ${submission.resume_file_name || 'none'}.`;
+  if (!process.env.OPENAI_API_KEY || !resumeText.trim()) {
+    const source = resumeText.trim() ? getMissingResumeTextSource(submission) : getMissingResumeTextSource(submission);
+    return {
+      output: buildFallbackOutput(source, submission, !process.env.OPENAI_API_KEY ? 'Missing OpenAI API key.' : 'Missing parsed resume text.'),
+      status: 'generated_demo',
+      error: !process.env.OPENAI_API_KEY ? null : 'No parsed resume text is available for grounded final output.'
+    };
+  }
 
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        temperature: 0.35,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'You create paid resume rewrite fulfillment outputs for Lodestar CV.',
-              'The output must be a completed resume rewrite ready to send to employers. It must not be advice, a cover letter, outreach copy, a role explanation, or a list of suggested bullets.',
-              'Return JSON only with exactly these keys: resume_title string, rewritten_summary string, core_skills array of strings, rewritten_experience array, technology array of strings, keyword_alignment array of strings, fit_risks array of strings, suggested_next_step string.',
-              'rewritten_experience must be a complete resume experience section. Each item must have company string, role_title string, and bullets array of rewritten resume bullets.',
-              'Evidence-first workflow: extract resume evidence first; extract job requirements second; map evidence to requirements third; rewrite only what the resume supports.',
-              'Do not invent experience, employers, credentials, tools, metrics, industries, sales motions, or job duties. You may translate and reposition existing resume evidence, but unsupported job-description duties must go into fit_risks instead of bullets.',
-              'If resume text is unavailable or thin, use the file name, target role, job description, extra context, and preview only as limited context. Be explicit in fit_risks that the rewrite is constrained by missing parsed resume evidence.',
-              `Available Lodestar researched role buckets: ${roleBuckets.join(', ')}.`,
-              rolePack
-            ].join('\n')
-          },
-          {
-            role: 'user',
-            content: [
-              `Customer name: ${submission.name || ''}`,
-              `Target role: ${targetRole}`,
-              `Detected role bucket: ${roleBucket}`,
-              `Resume context: ${resumeContext}`,
-              `Job description: ${jobDescription}`,
-              `Extra context: ${submission.extra_context || ''}`,
-              `Preview scan: ${preview}`
-            ].join('\n\n')
-          }
-        ],
-        response_format: { type: 'json_object' }
-      })
-    });
+    const stageA = await callOpenAiJson(
+      [
+        {
+          role: 'system',
+          content: [
+            'Stage A: Parse the uploaded resume into structured source evidence.',
+            'Return JSON only with exactly these keys: candidate_name string, contact_line string, resume_headline string, professional_summary string, experience array, additional_sections array.',
+            'Experience entries must preserve company, role_title, date_range, and original_bullets from the uploaded resume. Use empty strings for missing company, role title, or dates.',
+            'Additional sections may include only skills, technology, education, certifications, or similar sections present in the uploaded resume. Preserve Technology as Technology when present.',
+            'Do not infer, rewrite, improve, normalize beyond punctuation/capitalization, or add employers, titles, dates, duties, tools, industries, credentials, skills, metrics, or work history.',
+            'If a field is not present in the uploaded resume text, return an empty string or empty array.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: `Uploaded resume text:\n${resumeText}`
+        }
+      ],
+      0
+    );
 
-    if (!res.ok) {
+    if (!stageA.content) {
+      const fallbackSource = getMissingResumeTextSource(submission);
       return {
-        output: demoFinalOutput(submission),
+        output: buildFallbackOutput(fallbackSource, submission, 'Stage A failed.'),
         status: 'generated_demo',
-        error: await res.text()
+        error: stageA.error || 'OpenAI returned no parsed source evidence.'
       };
     }
 
-    const data = await res.json();
-    const content = data?.choices?.[0]?.message?.content;
-    const output = content ? parseFinalOutput(content) : null;
+    const sourceEvidence = parseSourceEvidence(stageA.content);
+
+    if (!sourceEvidence || isThinSourceEvidence(sourceEvidence)) {
+      const fallbackSource = sourceEvidence || getMissingResumeTextSource(submission);
+      return {
+        output: buildFallbackOutput(fallbackSource, submission, 'Stage A returned thin source evidence.'),
+        status: 'generated_demo',
+        error: 'OpenAI returned invalid or thin parsed source evidence.'
+      };
+    }
+
+    const stageB = await callOpenAiJson(
+      [
+        {
+          role: 'system',
+          content: [
+            'Stage B: Rewrite only the parsed source evidence toward the target job description.',
+            'This product is a resume rewrite, not a resume advice report. Return a ready-to-use rewritten resume draft plus separate fit risks.',
+            'Return JSON only in this exact shape: {"resume":{"candidate_name":string,"contact_line":string,"resume_headline":string,"professional_summary":string,"experience":[{"company":string,"role_title":string,"date_range":string,"bullets":string[]}],"additional_sections":[{"section_title":string,"items":string[]}]},"fit_risks":string[],"suggested_next_step":string}.',
+            'Do not include core_skills, keyword_alignment, cover_note, outreach_message, next_application_moves, cover letters, outreach messages, generic application advice, or keyword lists.',
+            'You must not create new employers, companies, job titles, dates, metrics, tools, certifications, industries, responsibilities, work history, technical skills, telecom experience, door-to-door experience, lobby event experience, or MDU experience.',
+            'If a duty, skill, keyword, industry, or sales motion appears only in the job description and not in parsed source evidence, it cannot be written as experience. Put it in fit_risks or address it only through transferable evidence that appears in the parsed resume.',
+            'Preserve company names exactly as parsed. Preserve role titles exactly as parsed unless lightly normalizing punctuation/capitalization. Preserve date ranges; if absent use an empty string.',
+            'Include a maximum of 3 experience entries. If more than 3 roles exist, choose the 3 most relevant to the target job. Never replace multiple jobs with one invented job.',
+            'Each included role should have 3 to 5 rewritten bullets. Every bullet must be based on original bullets from that same role. Do not move achievements from one employer to another. Do not invent metrics.',
+            'Rewrite the professional summary using actual resume evidence and target role alignment only through transferable experience.',
+            'Avoid these phrases: dynamic and motivated, eager to leverage, passionate about, proven ability unless supported by evidence, successfully increasing brand awareness, results-driven professional, team player.',
+            'Do not create Core Skills or Keyword Alignment sections. Only include additional sections if the parsed resume had a skills, technology, education, certification, or similar section. Include only items present in parsed source evidence and avoid duplicate Skills/Technology content.',
+            'Fit risks must be separate from the resume, identify gaps without sounding like rejection, and protect against overclaiming.',
+            'Suggested next step must be a soft Lodestar upsell and must not tell the user to rewrite the resume themselves.',
+            `Available Lodestar researched role buckets: ${roleBuckets.join(', ')}.`,
+            rolePack
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: [
+            `Target role: ${targetRole}`,
+            `Detected role bucket: ${roleBucket}`,
+            `Parsed source evidence JSON: ${JSON.stringify(sourceEvidence)}`,
+            `Job description: ${jobDescription}`
+          ].join('\n\n')
+        }
+      ],
+      0.15
+    );
+
+    if (!stageB.content) {
+      return {
+        output: buildFallbackOutput(sourceEvidence, submission, 'Stage B failed.'),
+        status: 'generated_demo',
+        error: stageB.error || 'OpenAI returned no final output.'
+      };
+    }
+
+    const output = parseFinalOutput(stageB.content);
 
     if (!output) {
       return {
-        output: demoFinalOutput(submission),
+        output: buildFallbackOutput(sourceEvidence, submission, 'Stage B returned invalid final output JSON.'),
         status: 'generated_demo',
         error: 'OpenAI returned an invalid final output payload.'
       };
     }
 
+    const validation = validateFinalOutputAgainstSource(output, sourceEvidence);
+
+    if (!validation.valid) {
+      return {
+        output: buildFallbackOutput(sourceEvidence, submission, validation.reason),
+        status: 'generated_demo',
+        error: validation.reason
+      };
+    }
+
     return { output, status: 'generated', error: null };
   } catch (error) {
+    const fallbackSource = getMissingResumeTextSource(submission);
     return {
-      output: demoFinalOutput(submission),
+      output: buildFallbackOutput(fallbackSource, submission, 'OpenAI final output failed.'),
       status: 'generated_demo',
       error: error instanceof Error ? error.message : 'OpenAI final output failed.'
     };
