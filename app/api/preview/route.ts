@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { extractResumeText } from '@/lib/resumeText';
+import { ingestResumeFile, type ParsedResume } from '@/lib/resumeIngest';
 import { createSubmission, updateSubmission, uploadResumeToSupabase } from '@/lib/supabaseRest';
 
 export const runtime = 'nodejs';
@@ -79,24 +79,35 @@ export async function POST(req: Request) {
     let resumePath = '';
     let resumeFileName = '';
     let resumeText = '';
+    let parsedResume: ParsedResume | null = null;
     let parserStatus = '';
+    let parserProvider = '';
     let parserError = '';
     let parsedAt = '';
 
     if (file instanceof File && file.size > 0) {
       resumeFileName = file.name;
-      const parsedResume = await extractResumeText(file).catch(() => ({
+      const ingestion = await ingestResumeFile(file).catch(() => ({
         resumeText: '',
+        parsedResume: null,
         parserStatus: 'failed' as const,
-        parserError: 'Could not extract text from this resume. Please upload a readable PDF, DOCX, or TXT file.'
+        parserProvider: 'none' as const,
+        parserError: 'Could not extract text from this resume. Please upload a readable PDF, DOCX, or TXT file.',
+        parsedAt: new Date().toISOString()
       }));
-      resumeText = parsedResume.resumeText;
-      parserStatus = parsedResume.parserStatus;
-      parserError = parsedResume.parserError || '';
-      parsedAt = new Date().toISOString();
+      resumeText = ingestion.resumeText;
+      parsedResume = ingestion.parsedResume;
+      parserStatus = ingestion.parserStatus;
+      parserProvider = ingestion.parserProvider;
+      parserError = ingestion.parserError || '';
+      parsedAt = ingestion.parsedAt || new Date().toISOString();
 
-      const uploaded = await uploadResumeToSupabase(file);
-      resumePath = uploaded.path;
+      try {
+        const uploaded = await uploadResumeToSupabase(file);
+        resumePath = uploaded.path;
+      } catch (error) {
+        parserError = parserError || (error instanceof Error ? error.message : 'Resume upload failed.');
+      }
     }
 
     const ai = await openAiPreview(targetRole, jobDescription, extraContext);
@@ -119,9 +130,11 @@ export async function POST(req: Request) {
         jobDescription,
         extraContext,
         resumeText,
+        parsedResume,
         resumeFileName,
         resumePath,
         parserStatus,
+        parserProvider,
         parserError,
         parsedAt,
         preview,

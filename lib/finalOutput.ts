@@ -1,3 +1,5 @@
+import { coerceParsedResume, type ParsedResume } from './resumeIngest';
+
 export type FinalOutput = {
   resume: {
     candidate_name: string;
@@ -19,22 +21,7 @@ export type FinalOutput = {
   suggested_next_step: string;
 };
 
-type SourceEvidence = {
-  candidate_name: string;
-  contact_line: string;
-  resume_headline: string;
-  professional_summary: string;
-  experience: Array<{
-    company: string;
-    role_title: string;
-    date_range: string;
-    original_bullets: string[];
-  }>;
-  additional_sections: Array<{
-    section_title: string;
-    items: string[];
-  }>;
-};
+type SourceEvidence = ParsedResume;
 
 type RoleBucket =
   | 'software_engineer'
@@ -56,6 +43,7 @@ type SubmissionForFinalOutput = {
   job_description?: string | null;
   extra_context?: string | null;
   resume_text?: string | null;
+  parsed_resume?: unknown;
   resume_file_name?: string | null;
   preview?: unknown;
 };
@@ -83,23 +71,6 @@ function asStringArray(value: unknown) {
   return Array.isArray(value) ? value.map(normalizeText).filter(Boolean) : [];
 }
 
-function parseSourceExperience(value: unknown): SourceEvidence['experience'] {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((item) => {
-      const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-
-      return {
-        company: normalizeText(record.company),
-        role_title: normalizeText(record.role_title || record.title),
-        date_range: normalizeText(record.date_range || record.dates),
-        original_bullets: asStringArray(record.original_bullets || record.bullets)
-      };
-    })
-    .filter((item) => item.company || item.role_title || item.original_bullets.length);
-}
-
 function parseAdditionalSections(value: unknown): SourceEvidence['additional_sections'] {
   if (!Array.isArray(value)) return [];
 
@@ -113,22 +84,6 @@ function parseAdditionalSections(value: unknown): SourceEvidence['additional_sec
       };
     })
     .filter((section) => section.section_title && section.items.length);
-}
-
-function parseSourceEvidence(content: string): SourceEvidence | null {
-  try {
-    const parsed = JSON.parse(content) as Record<string, unknown>;
-    return {
-      candidate_name: normalizeText(parsed.candidate_name),
-      contact_line: normalizeText(parsed.contact_line || parsed.contact_information),
-      resume_headline: normalizeText(parsed.resume_headline || parsed.headline),
-      professional_summary: normalizeText(parsed.professional_summary || parsed.summary),
-      experience: parseSourceExperience(parsed.experience),
-      additional_sections: parseAdditionalSections(parsed.additional_sections)
-    };
-  } catch {
-    return null;
-  }
 }
 
 function parseFinalExperience(value: unknown): FinalOutput['resume']['experience'] {
@@ -231,17 +186,6 @@ function getRolePack(bucket: RoleBucket) {
   ].join('\n');
 }
 
-function isThinSourceEvidence(source: SourceEvidence) {
-  return (
-    !source.candidate_name &&
-    !source.contact_line &&
-    !source.resume_headline &&
-    !source.professional_summary &&
-    !source.experience.length &&
-    !source.additional_sections.length
-  );
-}
-
 function buildFallbackOutput(
   source: SourceEvidence,
   submission: SubmissionForFinalOutput,
@@ -332,6 +276,26 @@ function getMissingResumeTextSource(submission: SubmissionForFinalOutput): Sourc
   };
 }
 
+function getResumeTextFallbackSource(submission: SubmissionForFinalOutput): SourceEvidence {
+  const resumeText = normalizeText(submission.resume_text);
+
+  return {
+    candidate_name: normalizeText(submission.name),
+    contact_line: '',
+    resume_headline: '',
+    professional_summary: '',
+    experience: [],
+    additional_sections: resumeText
+      ? [
+          {
+            section_title: 'Uploaded Resume Text',
+            items: [resumeText.slice(0, 4000)]
+          }
+        ]
+      : []
+  };
+}
+
 async function callOpenAiJson(messages: Array<{ role: 'system' | 'user'; content: string }>, temperature: number) {
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -361,76 +325,47 @@ export async function generatePaidFinalOutput(submission: SubmissionForFinalOutp
   const roleBucket = detectRoleBucket(targetRole, jobDescription);
   const rolePack = getRolePack(roleBucket);
   const resumeText = normalizeText(submission.resume_text);
+  const sourceEvidence = coerceParsedResume(submission.parsed_resume);
 
-  if (resumeText.length < 80) {
+  if (!sourceEvidence && resumeText.length < 80) {
     return {
       output: buildUnreadableResumeFallback(submission),
       status: 'generated_demo',
-      error: 'Parsed resume text is missing or too short for grounded final output.'
+      error: 'Parsed resume evidence is missing and resume text is too short for grounded final output.'
+    };
+  }
+
+  if (!sourceEvidence) {
+    return {
+      output: buildFallbackOutput(
+        getResumeTextFallbackSource(submission),
+        submission,
+        'Stored parsed resume evidence is missing.'
+      ),
+      status: 'generated_demo',
+      error: 'Stored parsed resume evidence is missing; used conservative resume_text fallback.'
     };
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    const source = getMissingResumeTextSource(submission);
     return {
-      output: buildFallbackOutput(source, submission, 'Missing OpenAI API key.'),
+      output: buildFallbackOutput(sourceEvidence, submission, 'Missing OpenAI API key.'),
       status: 'generated_demo',
       error: null
     };
   }
 
   try {
-    const stageA = await callOpenAiJson(
+    const rewritten = await callOpenAiJson(
       [
         {
           role: 'system',
           content: [
-            'Stage A: Parse the uploaded resume into structured source evidence.',
-            'Return JSON only with exactly these keys: candidate_name string, contact_line string, resume_headline string, professional_summary string, experience array, additional_sections array.',
-            'Experience entries must preserve company, role_title, date_range, and original_bullets from the uploaded resume. Use empty strings for missing company, role title, or dates.',
-            'Additional sections may include only skills, technology, education, certifications, or similar sections present in the uploaded resume. Preserve Technology as Technology when present.',
-            'Do not infer, rewrite, improve, normalize beyond punctuation/capitalization, or add employers, titles, dates, duties, tools, industries, credentials, skills, metrics, or work history.',
-            'If a field is not present in the uploaded resume text, return an empty string or empty array.'
-          ].join('\n')
-        },
-        {
-          role: 'user',
-          content: `Uploaded resume text:\n${resumeText}`
-        }
-      ],
-      0
-    );
-
-    if (!stageA.content) {
-      const fallbackSource = getMissingResumeTextSource(submission);
-      return {
-        output: buildFallbackOutput(fallbackSource, submission, 'Stage A failed.'),
-        status: 'generated_demo',
-        error: stageA.error || 'OpenAI returned no parsed source evidence.'
-      };
-    }
-
-    const sourceEvidence = parseSourceEvidence(stageA.content);
-
-    if (!sourceEvidence || isThinSourceEvidence(sourceEvidence)) {
-      const fallbackSource = sourceEvidence || getMissingResumeTextSource(submission);
-      return {
-        output: buildFallbackOutput(fallbackSource, submission, 'Stage A returned thin source evidence.'),
-        status: 'generated_demo',
-        error: 'OpenAI returned invalid or thin parsed source evidence.'
-      };
-    }
-
-    const stageB = await callOpenAiJson(
-      [
-        {
-          role: 'system',
-          content: [
-            'Stage B: Rewrite only the parsed source evidence toward the target job description.',
+            'Rewrite only the stored parsed resume evidence toward the target job description.',
             'This product is a resume rewrite, not a resume advice report. Return a ready-to-use rewritten resume draft plus separate fit risks.',
             'Return JSON only in this exact shape: {"resume":{"candidate_name":string,"contact_line":string,"resume_headline":string,"professional_summary":string,"experience":[{"company":string,"role_title":string,"date_range":string,"bullets":string[]}],"additional_sections":[{"section_title":string,"items":string[]}]},"fit_risks":string[],"suggested_next_step":string}.',
             'Do not include core_skills, keyword_alignment, cover_note, outreach_message, next_application_moves, cover letters, outreach messages, generic application advice, or keyword lists.',
-            'You must not create new employers, companies, job titles, dates, metrics, tools, certifications, industries, responsibilities, work history, technical skills, telecom experience, door-to-door experience, lobby event experience, or MDU experience.',
+            'You must not create new employers, companies, job titles, dates, metrics, tools, certifications, industries, responsibilities, work history, technical skills, telecom experience, door-to-door experience, lobby event experience, MDU experience, routers, modems, or wireless devices.',
             'If a duty, skill, keyword, industry, or sales motion appears only in the job description and not in parsed source evidence, it cannot be written as experience. Put it in fit_risks or address it only through transferable evidence that appears in the parsed resume.',
             'Preserve company names exactly as parsed. Preserve role titles exactly as parsed unless lightly normalizing punctuation/capitalization. Preserve date ranges; if absent use an empty string.',
             'Include a maximum of 3 experience entries. If more than 3 roles exist, choose the 3 most relevant to the target job. Never replace multiple jobs with one invented job.',
@@ -457,19 +392,19 @@ export async function generatePaidFinalOutput(submission: SubmissionForFinalOutp
       0.15
     );
 
-    if (!stageB.content) {
+    if (!rewritten.content) {
       return {
-        output: buildFallbackOutput(sourceEvidence, submission, 'Stage B failed.'),
+        output: buildFallbackOutput(sourceEvidence, submission, 'Final rewrite failed.'),
         status: 'generated_demo',
-        error: stageB.error || 'OpenAI returned no final output.'
+        error: rewritten.error || 'OpenAI returned no final output.'
       };
     }
 
-    const output = parseFinalOutput(stageB.content);
+    const output = parseFinalOutput(rewritten.content);
 
     if (!output) {
       return {
-        output: buildFallbackOutput(sourceEvidence, submission, 'Stage B returned invalid final output JSON.'),
+        output: buildFallbackOutput(sourceEvidence, submission, 'Final rewrite returned invalid final output JSON.'),
         status: 'generated_demo',
         error: 'OpenAI returned an invalid final output payload.'
       };
@@ -487,9 +422,8 @@ export async function generatePaidFinalOutput(submission: SubmissionForFinalOutp
 
     return { output, status: 'generated', error: null };
   } catch (error) {
-    const fallbackSource = getMissingResumeTextSource(submission);
     return {
-      output: buildFallbackOutput(fallbackSource, submission, 'OpenAI final output failed.'),
+      output: buildFallbackOutput(sourceEvidence || getMissingResumeTextSource(submission), submission, 'OpenAI final output failed.'),
       status: 'generated_demo',
       error: error instanceof Error ? error.message : 'OpenAI final output failed.'
     };

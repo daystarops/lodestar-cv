@@ -7,7 +7,9 @@ create table if not exists public.submissions (
   job_description text,
   extra_context text,
   resume_text text,
+  parsed_resume jsonb,
   parser_status text,
+  parser_provider text,
   parser_error text,
   parsed_at timestamptz,
   resume_file_name text,
@@ -43,7 +45,13 @@ alter table public.submissions
 add column if not exists resume_text text;
 
 alter table public.submissions
+add column if not exists parsed_resume jsonb;
+
+alter table public.submissions
 add column if not exists parser_status text;
+
+alter table public.submissions
+add column if not exists parser_provider text;
 
 alter table public.submissions
 add column if not exists parser_error text;
