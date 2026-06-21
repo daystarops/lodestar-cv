@@ -284,6 +284,26 @@ function buildFallbackOutput(
   };
 }
 
+function buildUnreadableResumeFallback(submission: SubmissionForFinalOutput): FinalOutput {
+  return {
+    resume: {
+      candidate_name: normalizeText(submission.name),
+      contact_line: '',
+      resume_headline: '',
+      professional_summary:
+        'The uploaded resume could not be read clearly enough to create an evidence-based rewrite. Please upload a text-based PDF/DOCX or paste resume text when that option is available.',
+      experience: [],
+      additional_sections: []
+    },
+    fit_risks: [
+      'The uploaded resume text was missing or too short, so Lodestar CV could not safely preserve real employers, titles, dates, or bullets.',
+      'The job description was not used as resume evidence.'
+    ],
+    suggested_next_step:
+      'Upload a text-based PDF/DOCX resume and Lodestar CV can generate a grounded final rewrite from the parsed resume evidence.'
+  };
+}
+
 function validateFinalOutputAgainstSource(output: FinalOutput, source: SourceEvidence) {
   const sourceCompanies = new Set(source.experience.map((item) => item.company).filter(Boolean));
   const sourceRoleTitles = new Set(source.experience.map((item) => item.role_title).filter(Boolean));
@@ -340,14 +360,22 @@ export async function generatePaidFinalOutput(submission: SubmissionForFinalOutp
   const jobDescription = submission.job_description || '';
   const roleBucket = detectRoleBucket(targetRole, jobDescription);
   const rolePack = getRolePack(roleBucket);
-  const resumeText = submission.resume_text || '';
+  const resumeText = normalizeText(submission.resume_text);
 
-  if (!process.env.OPENAI_API_KEY || !resumeText.trim()) {
-    const source = resumeText.trim() ? getMissingResumeTextSource(submission) : getMissingResumeTextSource(submission);
+  if (resumeText.length < 80) {
     return {
-      output: buildFallbackOutput(source, submission, !process.env.OPENAI_API_KEY ? 'Missing OpenAI API key.' : 'Missing parsed resume text.'),
+      output: buildUnreadableResumeFallback(submission),
       status: 'generated_demo',
-      error: !process.env.OPENAI_API_KEY ? null : 'No parsed resume text is available for grounded final output.'
+      error: 'Parsed resume text is missing or too short for grounded final output.'
+    };
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    const source = getMissingResumeTextSource(submission);
+    return {
+      output: buildFallbackOutput(source, submission, 'Missing OpenAI API key.'),
+      status: 'generated_demo',
+      error: null
     };
   }
 

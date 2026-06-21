@@ -53,12 +53,33 @@ export default function OrderForm() {
         body: data
       });
 
-      const json = await res.json();
+      const responseText = await res.text();
+      let json: {
+        error?: string;
+        preview?: Preview;
+        submissionId?: string | null;
+        resumePath?: string;
+        parserStatus?: string;
+        parserError?: string;
+      } = {};
+
+      try {
+        json = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        throw new Error('Preview failed. Please try again.');
+      }
+
       if (!res.ok) throw new Error(json.error || 'Preview failed.');
+
+      if (!json.preview) throw new Error('Preview failed.');
 
       setPreview(json.preview);
       setSubmissionId(json.submissionId || submissionId);
       setResumePath(json.resumePath || '');
+
+      if (json.parserStatus && json.parserStatus !== 'parsed' && json.parserError) {
+        setMessage(json.parserError);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Preview failed.');
     } finally {

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import { extractResumeText } from '@/lib/resumeText';
 import { createSubmission, updateSubmission, uploadResumeToSupabase } from '@/lib/supabaseRest';
+
+export const runtime = 'nodejs';
 
 function keywordScan(text: string) {
   const library = [
@@ -75,15 +78,26 @@ export async function POST(req: Request) {
 
     let resumePath = '';
     let resumeFileName = '';
+    let resumeText = '';
+    let parserStatus = '';
+    let parserError = '';
+    let parsedAt = '';
 
     if (file instanceof File && file.size > 0) {
       resumeFileName = file.name;
+      const parsedResume = await extractResumeText(file).catch(() => ({
+        resumeText: '',
+        parserStatus: 'failed' as const,
+        parserError: 'Could not extract text from this resume. Please upload a readable PDF, DOCX, or TXT file.'
+      }));
+      resumeText = parsedResume.resumeText;
+      parserStatus = parsedResume.parserStatus;
+      parserError = parsedResume.parserError || '';
+      parsedAt = new Date().toISOString();
+
       const uploaded = await uploadResumeToSupabase(file);
       resumePath = uploaded.path;
     }
-
-    // TODO: Add proper resume parsing for PDF/DOCX uploads before relying on uploaded
-    // files as rewrite source material. For now fulfillment only uses stored text fields.
 
     const ai = await openAiPreview(targetRole, jobDescription, extraContext);
     const foundKeywords = keywordScan(`${targetRole} ${jobDescription} ${extraContext}`);
@@ -104,8 +118,12 @@ export async function POST(req: Request) {
         targetRole,
         jobDescription,
         extraContext,
+        resumeText,
         resumeFileName,
         resumePath,
+        parserStatus,
+        parserError,
+        parsedAt,
         preview,
         paymentStatus: 'previewed'
       };
@@ -115,7 +133,13 @@ export async function POST(req: Request) {
         : await createSubmission(payload);
     }
 
-    return NextResponse.json({ preview, submissionId: submission?.id || null, resumePath });
+    return NextResponse.json({
+      preview,
+      submissionId: submission?.id || null,
+      resumePath,
+      parserStatus,
+      parserError
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Preview failed' },

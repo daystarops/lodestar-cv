@@ -5,6 +5,9 @@ type SubmissionPayload = {
   jobDescription?: string;
   extraContext?: string;
   resumeText?: string;
+  parserStatus?: string;
+  parserError?: string | null;
+  parsedAt?: string | null;
   resumeFileName?: string;
   resumePath?: string;
   preview?: unknown;
@@ -37,6 +40,9 @@ function toSubmissionRow(payload: SubmissionUpdatePayload) {
   if (payload.jobDescription !== undefined) row.job_description = payload.jobDescription || null;
   if (payload.extraContext !== undefined) row.extra_context = payload.extraContext || null;
   if (payload.resumeText !== undefined) row.resume_text = payload.resumeText || null;
+  if (payload.parserStatus !== undefined) row.parser_status = payload.parserStatus || null;
+  if (payload.parserError !== undefined) row.parser_error = payload.parserError || null;
+  if (payload.parsedAt !== undefined) row.parsed_at = payload.parsedAt || null;
   if (payload.resumeFileName !== undefined) row.resume_file_name = payload.resumeFileName || null;
   if (payload.resumePath !== undefined) row.resume_path = payload.resumePath || null;
   if (payload.preview !== undefined) row.preview = payload.preview || null;
